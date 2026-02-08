@@ -1,0 +1,60 @@
+# Estágio de build
+FROM node:22-bookworm AS build
+
+# Instalar Bun (requerido pelo build scripts do OpenClaw)
+RUN curl -fsSL https://bun.sh/install | bash
+ENV PATH="/root/.bun/bin:${PATH}"
+RUN corepack enable
+
+WORKDIR /app
+
+# Copiar arquivos de dependências
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
+COPY ui/package.json ./ui/package.json
+COPY patches ./patches
+COPY scripts ./scripts
+
+RUN pnpm install --frozen-lockfile
+
+# Copiar o restante do projeto e build
+COPY . .
+RUN OPENCLAW_A2UI_SKIP_MISSING=1 pnpm build
+ENV OPENCLAW_PREFER_PNPM=1
+RUN pnpm ui:build
+
+# Estágio final
+FROM node:22-bookworm
+
+WORKDIR /app
+
+# Copiar código buildado
+COPY --from=build /app /app
+
+# Instalar CLI globalmente
+RUN npm install -g openclaw@latest
+
+# Permitir usuário node escrever arquivos
+RUN chown -R node:node /app
+USER node
+ENV HOME=/home/node
+
+# Onboarding não-interativo com leitura de secret e export
+ENTRYPOINT ["sh", "-c", "\
+  # Lê o secret montado pelo Docker Swarm e exporta para variável que o CLI espera\n\
+  export OPENAI_API_KEY=$(cat /run/secrets/openai_api_key) && \n\
+  # Se não existe config, roda onboarding automático\n\
+  if [ ! -f /home/node/.openclaw/openclaw.json ]; then \n\
+    echo 'No config found — running non-interactive onboarding'; \n\
+    openclaw onboard --non-interactive --accept-risk \\\n\
+      --mode local \\\n\
+      --auth-choice apiKey \\\n\
+      --openai-api-key \"$OPENAI_API_KEY\" \\\n\
+      --gateway-port 18789 \\\n\
+      --gateway-bind lan \\\n\
+      --skip-skills \\\n\
+      --install-daemon; \n\
+    echo 'Onboarding complete'; \n\
+  fi && \n\
+  echo 'Starting gateway...' && \n\
+  openclaw gateway --port 18789 --bind lan \n\
+"]
