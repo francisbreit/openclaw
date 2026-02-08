@@ -42,9 +42,10 @@ ENV HOME=/home/node
 
 # Onboarding não interativo com OpenAI
 ENTRYPOINT ["sh", "-c", "\
+  export OPENAI_API_KEY=$(cat /run/secrets/openai_api_key) && \
   if [ ! -f /home/node/.openclaw/openclaw.json ]; then \
-    echo 'No config found — running non-interactive onboarding'; \
-    openclaw onboard --non-interactive \
+    echo 'Running non-interactive onboarding'; \
+    openclaw onboard --non-interactive --accept-risk \
       --mode local \
       --auth-choice apiKey \
       --openai-api-key \"$OPENAI_API_KEY\" \
