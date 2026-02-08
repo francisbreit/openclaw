@@ -42,8 +42,8 @@ ENV HOME=/home/node
 # Verifica onboarding e executa
 ENTRYPOINT ["sh", "-c", "\
   if [ ! -f /home/node/.openclaw/openclaw.json ]; then \
-    echo 'No config found — running onboarding'; \
-    openclaw onboard --yes && \
+    echo 'No config found — running onboarding (quickstart)'; \
+    openclaw onboard --flow quickstart && \
     echo 'Onboarding complete'; \
   fi && \
   echo 'Starting gateway...' && \
