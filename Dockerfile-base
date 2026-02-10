@@ -1,45 +1,60 @@
 # Use a imagem base do OpenClaw já construída
 FROM alpine/openclaw:latest
 
-# Mudar temporariamente para root para instalar pacotes
-USER root
+# Instalar Bun (requerido pelo build scripts do OpenClaw)
+RUN curl -fsSL https://bun.sh/install | bash
+ENV PATH="/root/.bun/bin:${PATH}"
+RUN corepack enable
 
-# Instalar bash para melhor compatibilidade com scripts
-RUN apk add --no-cache bash curl jq
-
-# Voltar para o usuário não-root (ajuste se necessário)
-USER node
-
-# Criar diretório de trabalho e configurar usuário
 WORKDIR /app
 
-# Verificar se o OpenClaw está instalado na imagem base
-RUN if [ -f /usr/local/bin/openclaw ]; then \
-      echo "OpenClaw encontrado em /usr/local/bin/openclaw"; \
-    elif [ -f /app/openclaw.mjs ]; then \
-      echo "OpenClaw encontrado em /app/openclaw.mjs"; \
-    else \
-      echo "ERRO: OpenClaw não encontrado na imagem base!" && exit 1; \
-    fi
+# Copiar arquivos de dependências
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
+COPY ui/package.json ./ui/package.json
+COPY patches ./patches
+COPY scripts ./scripts
 
-# Criar usuário não-root (se não existir)
-RUN addgroup -g 1000 node 2>/dev/null || true && \
-    adduser -u 1000 -G node -s /bin/sh -D node 2>/dev/null || true
+RUN pnpm install --frozen-lockfile
 
-# Criar diretório de configuração
-RUN mkdir -p /home/node/.openclaw && \
-    chown -R node:node /home/node/.openclaw
+# Copiar o restante do projeto e build
+COPY . .
+RUN OPENCLAW_A2UI_SKIP_MISSING=1 pnpm build
+ENV OPENCLAW_PREFER_PNPM=1
+RUN pnpm ui:build
 
-# Mudar para usuário não-root
+# Estágio final
+FROM node:22-bookworm
+
+WORKDIR /app
+
+# Copiar código buildado
+COPY --from=build /app /app
+
+# Instalar CLI globalmente
+RUN npm install -g openclaw@latest
+
+# Permitir usuário node escrever arquivos
+RUN chown -R node:node /app
 USER node
 ENV HOME=/home/node
-ENV PATH="/home/node/.local/bin:${PATH}"
 
-# Expor porta padrão do OpenClaw
-EXPOSE 18789
-
-# Script de inicialização otimizado
-COPY --chown=node:node entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
-
-ENTRYPOINT ["/entrypoint.sh"]
+# Onboarding não-interativo com leitura de secret e export
+ENTRYPOINT ["sh", "-c", "\
+  # Lê o secret montado pelo Docker Swarm e exporta para variável que o CLI espera\n\
+  export OPENAI_API_KEY=$(cat /run/secrets/openai_api_key) && \n\
+  # Se não existe config, roda onboarding automático\n\
+  if [ ! -f /home/node/.openclaw/openclaw.json ]; then \n\
+    echo 'No config found — running non-interactive onboarding'; \n\
+    openclaw onboard --non-interactive --accept-risk \\\n\
+      --mode local \\\n\
+      --auth-choice apiKey \\\n\
+      --openai-api-key \"$OPENAI_API_KEY\" \\\n\
+      --gateway-port 18789 \\\n\
+      --gateway-bind lan \\\n\
+      --skip-skills \\\n\
+      --install-daemon; \n\
+    echo 'Onboarding complete'; \n\
+  fi && \n\
+  echo 'Starting gateway...' && \n\
+  openclaw gateway --port 18789 --bind lan \n\
+"]
