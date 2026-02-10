@@ -1,0 +1,67 @@
+# Use a imagem base que você mencionou
+FROM alpine/openclaw:latest
+
+# Definir variáveis de ambiente
+ENV HOME=/home/node
+ENV OPENCLAW_GATEWAY_PORT=18789
+
+# Criar usuário não-root se não existir
+RUN if ! id -u node >/dev/null 2>&1; then \
+    addgroup -g 1000 node && \
+    adduser -u 1000 -G node -s /bin/sh -D node; \
+fi
+
+# Garantir permissões adequadas
+RUN mkdir -p $HOME/.openclaw && \
+    chown -R node:node $HOME/.openclaw
+
+# Mudar para usuário não-root
+USER node
+WORKDIR /app
+
+# Expor a porta do gateway
+EXPOSE 18789
+
+# Entrypoint simplificado que faz onboarding automático
+ENTRYPOINT ["sh", "-c", "\
+  # Lê o secret do Docker Swarm\n\
+  export OPENAI_API_KEY=$(cat /run/secrets/openai_api_key 2>/dev/null || echo '') && \n\
+  \n\
+  # Verifica se a configuração já existe\n\
+  if [ ! -f $HOME/.openclaw/openclaw.json ]; then \n\
+    echo 'Nenhuma configuração encontrada - executando onboarding automático' && \n\
+    \n\
+    # Tenta usar o comando openclaw (se instalado globalmente)\n\
+    if command -v openclaw >/dev/null 2>&1; then \n\
+      openclaw onboard --non-interactive --accept-risk \\\n\
+        --mode local \\\n\
+        --auth-choice apiKey \\\n\
+        --openai-api-key \"$OPENAI_API_KEY\" \\\n\
+        --gateway-port $OPENCLAW_GATEWAY_PORT \\\n\
+        --gateway-bind lan \\\n\
+        --skip-skills \\\n\
+        --install-daemon; \n\
+    else \n\
+      # Fallback para o script local (caso a imagem base tenha estrutura diferente)\n\
+      node openclaw.mjs onboard --non-interactive --accept-risk \\\n\
+        --mode local \\\n\
+        --auth-choice apiKey \\\n\
+        --openai-api-key \"$OPENAI_API_KEY\" \\\n\
+        --gateway-port $OPENCLAW_GATEWAY_PORT \\\n\
+        --gateway-bind lan \\\n\
+        --skip-skills \\\n\
+        --install-daemon; \n\
+    fi && \n\
+    echo 'Onboarding completo' \n\
+  else \n\
+    echo 'Configuração existente encontrada - pulando onboarding' \n\
+  fi && \n\
+  \n\
+  # Inicia o gateway\n\
+  echo 'Iniciando gateway...' && \n\
+  if command -v openclaw >/dev/null 2>&1; then \n\
+    exec openclaw gateway --port $OPENCLAW_GATEWAY_PORT --bind lan \n\
+  else \n\
+    exec node openclaw.mjs gateway --port $OPENCLAW_GATEWAY_PORT --bind lan \n\
+  fi \
+"]
