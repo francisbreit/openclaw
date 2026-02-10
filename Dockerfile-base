@@ -1,8 +1,14 @@
 # Use a imagem base do OpenClaw já construída
 FROM alpine/openclaw:latest
 
+# Mudar temporariamente para root para instalar pacotes
+USER root
+
 # Instalar bash para melhor compatibilidade com scripts
 RUN apk add --no-cache bash curl jq
+
+# Voltar para o usuário não-root (ajuste se necessário)
+USER node
 
 # Criar diretório de trabalho e configurar usuário
 WORKDIR /app
